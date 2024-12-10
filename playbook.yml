@@ -1,0 +1,114 @@
+---
+- name: Install dependencies on Ubuntu
+  hosts: localhost
+  become: yes
+  tasks:
+    - name: Install required tools on Ubuntu
+      apt:
+        name:
+          - wget
+          - git
+          - gcc
+          - make
+          - apptainer
+          - slurm-wlm
+          - openmpi-bin
+          - libopenmpi-dev
+        state: present
+        update_cache: yes
+
+    - name: Enable and start SLURM services
+      systemd:
+        name: "{{ item }}"
+        state: started
+        enabled: yes
+      with_items:
+        - slurmctld
+        - slurmd
+
+- name: Build and run UPC++ container on single-node (Ubuntu container)
+  hosts: localhost
+  become: yes
+  vars:
+    container_path: "/opt/upcxx-container.sif"
+    slurm_script_path: "/tmp/slurm_job.sh"
+    test_program_src: "test.cpp"
+    tasks_per_node: 2
+    job_name: "upcxx_test"
+    output_log: "/tmp/upcxx_test.out"
+    error_log: "/tmp/upcxx_test.err"
+
+  tasks:
+    - name: Create the container definition file
+      copy:
+        dest: /tmp/upcxx.def
+        content: |
+          Bootstrap: docker
+          From: ubuntu:22.04
+
+          %environment
+              export UPCXX_DIR=/opt/upcxx
+              export PATH="$UPCXX_DIR/bin:$PATH"
+              export LD_LIBRARY_PATH="$UPCXX_DIR/lib:$LD_LIBRARY_PATH" 
+              export UPCXX_NETWORK=mpi
+              export GASNET_SPAWNFN='C'
+              export GASNET_CSPAWN_CMD='mpirun -np %N %C'
+              export GASNET_WORKER_RANK=OMPI_COMM_WORLD_RANK 
+              export MPIRUN_CMD='mpirun -np %N %C'
+              export GASNET_MPI_SPAWNER=mpi
+              export GASNET_NETWORKDEPTH=4
+              export AMMPI_CREDITS_PP=8
+              export GASNET_MPI_THREAD=SINGLE
+
+          %post
+              apt-get update && apt-get install -y wget git gcc make openmpi-bin libopenmpi-dev python3 python3-pip
+              export UPCXX_DIR=/opt/upcxx
+              export PATH="$UPCXX_DIR/bin:$PATH"
+              export LD_LIBRARY_PATH="$UPCXX_DIR/lib:$LD_LIBRARY_PATH" 
+              export UPCXX_NETWORK=mpi
+              export GASNET_SPAWNFN='C'
+              export GASNET_CSPAWN_CMD='mpirun -np %N %C'
+              export GASNET_WORKER_RANK=OMPI_COMM_WORLD_RANK 
+              export MPIRUN_CMD='mpirun -np %N %C'
+              export GASNET_MPI_SPAWNER=mpi
+              git clone https://bitbucket.org/berkeleylab/upcxx.git /opt/upcxx-src
+              cd /opt/upcxx-src
+              ./configure --prefix=/opt/upcxx --with-cxx=mpicxx --disable-ibv --with-python=/usr/bin/python3 
+              make all
+              make install
+              cd /opt
+              upcxx -O -c test.cpp
+              upcxx -O -o test test.o
+
+          %files
+              ./test.cpp /opt/test.cpp
+
+    - name: Copy the test program source file
+      copy:
+        src: "{{ test_program_src }}"
+        dest: /tmp/test.cpp
+
+    - name: Build the Apptainer container
+      command:
+        cmd: apptainer build "{{ container_path }}" /tmp/upcxx.def
+        creates: "{{ container_path }}"
+
+    - name: Create the SLURM job script
+      become: true
+      copy:
+        dest: "{{ slurm_script_path }}"
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          #SBATCH --job-name={{ job_name }}
+          #SBATCH --nodes=1
+          #SBATCH --ntasks-per-node={{ tasks_per_node }}
+          #SBATCH --time=00:10:00
+          #SBATCH --output={{ output_log }}
+          #SBATCH --error={{ error_log }}
+
+          mpirun -np 2 --mca btl_vader_single_copy_mechanism none apptainer exec --sharens "{{ container_path }}" /opt/test
+
+    - name: Submit the SLURM job
+      become: false
+      shell: "/bin/bash -c 'sbatch {{ slurm_script_path }}'"
