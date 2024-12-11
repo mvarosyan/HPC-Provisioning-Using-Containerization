@@ -107,7 +107,7 @@
           #SBATCH --output={{ output_log }}
           #SBATCH --error={{ error_log }}
 
-          mpirun -np 2 --mca btl_vader_single_copy_mechanism none apptainer exec --sharens "{{ container_path }}" /opt/test
+         /usr/bin/time -o {{ output_log }} -a mpirun -np 2 --mca btl_vader_single_copy_mechanism none apptainer exec --sharens "{{ container_path }}" /opt/test
 
     - name: Submit the SLURM job
       become: false
