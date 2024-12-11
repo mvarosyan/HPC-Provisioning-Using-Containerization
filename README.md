@@ -1,4 +1,4 @@
-# HPC-Provisioning-Using-Containerization
+# HPC Provisioning Using Containerization
 
 This repository contains an Ansible playbook to provision a High-Performance Computing (HPC) environment using **Apptainer** (formerly Singularity) containers. It automates the installation of necessary dependencies, builds a container for **UPC++**, and runs a **SLURM** job to test the setup.
 
